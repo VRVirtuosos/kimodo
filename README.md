@@ -169,12 +169,12 @@ These annotations are already included in the BONES-SEED dataset, but the standa
 Kimodo is part of a larger effort to enable humanoid motion data for robotics, physical AI, and other applications.
 
 Check out these related works:
-* [SOMA Body Model](https://github.com/NVlabs/SOMA-X)
-* [BONES-SEED Dataset](https://huggingface.co/datasets/bones-studio/seed)
-* [ProtoMotions](https://github.com/NVlabs/ProtoMotions)
-* [SOMA Retargeter](https://github.com/NVIDIA/soma-retargeter)
-* [GEM](https://github.com/NVlabs/GEM-X)
-* [SONIC](https://github.com/NVlabs/GR00T-WholeBodyControl)
+* [SOMA Body Model](https://github.com/NVlabs/SOMA-X) - a unified parameteric human body model
+* [BONES-SEED Dataset](https://huggingface.co/datasets/bones-studio/seed) - a large scale human(oid) motion capture dataset in SOMA and G1 format
+* [ProtoMotions](https://github.com/NVlabs/ProtoMotions) - simulation and learning framework for training physically simulated human(oid)s
+* [SOMA Retargeter](https://github.com/NVIDIA/soma-retargeter) - SOMA to G1 retargeting tool
+* [GEM](https://github.com/NVlabs/GEM-X) - human motion reconstruction from video
+* [GEAR SONIC](https://github.com/NVlabs/GR00T-WholeBodyControl) - humanoid behavior foundation model for physical robots
 
 ## Citation
 
