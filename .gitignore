@@ -23,6 +23,8 @@ eggs/
 parts/
 sdist/
 var/
+models/
+kimodo-viser/
 wheels/
 pip-wheel-metadata/
 share/python-wheels/

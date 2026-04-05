@@ -26,15 +26,33 @@ class LLM2VecEncoder:
         cache_dir = os.environ.get("HUGGINGFACE_CACHE_DIR")
 
         if "TEXT_ENCODERS_DIR" in os.environ:
-            base_model_name_or_path = os.path.join(os.environ["TEXT_ENCODERS_DIR"], base_model_name_or_path)
-            peft_model_name_or_path = os.path.join(os.environ["TEXT_ENCODERS_DIR"], peft_model_name_or_path)
+            encoders_dir = os.environ["TEXT_ENCODERS_DIR"]
+            # Robust pathing: check if the model files are directly in encoders_dir
+            if os.path.isfile(os.path.join(encoders_dir, "config.json")):
+                print(f"Loading fully baked model directly from {encoders_dir}")
+                base_model_name_or_path = encoders_dir
+                peft_model_name_or_path = None
+            else:
+                # Standard behavior: join with encoders_dir
+                base_model_name_or_path = os.path.join(encoders_dir, base_model_name_or_path)
+                if peft_model_name_or_path and not peft_model_name_or_path.startswith("/"):
+                    peft_model_name_or_path = os.path.join(encoders_dir, peft_model_name_or_path)
 
-        self.model = LLM2Vec.from_pretrained(
-            base_model_name_or_path=base_model_name_or_path,
-            peft_model_name_or_path=peft_model_name_or_path,
-            torch_dtype=torch_dtype,
-            cache_dir=cache_dir,
-        )
+        if peft_model_name_or_path in [None, "None", ""]:
+            print(f"Loading baked LLM2Vec model from {base_model_name_or_path}...")
+            self.model = LLM2Vec.from_pretrained(
+                base_model_name_or_path=base_model_name_or_path,
+                peft_model_name_or_path=None,
+                torch_dtype=torch_dtype,
+                cache_dir=cache_dir,
+            )
+        else:
+            self.model = LLM2Vec.from_pretrained(
+                base_model_name_or_path=base_model_name_or_path,
+                peft_model_name_or_path=peft_model_name_or_path,
+                torch_dtype=torch_dtype,
+                cache_dir=cache_dir,
+            )
         self.model.eval()
         for p in self.model.parameters():
             p.requires_grad = False
