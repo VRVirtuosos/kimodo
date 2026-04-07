@@ -11,6 +11,7 @@ from kimodo import DEFAULT_MODEL, load_model
 from kimodo.constraints import load_constraints_lst
 from kimodo.exports.motion_io import save_kimodo_npz
 from kimodo.meta import load_prompts_from_meta
+from kimodo.demo.memory_manager import manager
 from kimodo.model.cfg import CFG_TYPES
 from kimodo.model.registry import get_model_info
 from kimodo.tools import load_json, seed_everything
@@ -263,6 +264,7 @@ def main():
     print(f"Using device: {device}")
 
     args = parse_args()
+    manager.log_memory_usage("Startup")
 
     # Load model (resolution of name done inside load_model)
     model, resolved_model = load_model(
@@ -274,6 +276,7 @@ def main():
     info = get_model_info(resolved_model)
     display = info.display_name if info else resolved_model
     print(f"Loaded model: {display} ({resolved_model})")
+    manager.log_memory_usage("After model load")
 
     # Get generation inputs
     generation_inputs = get_generation_inputs(args, model.fps)
@@ -321,6 +324,7 @@ def main():
         return_numpy=True,
         **cfg_kwargs,
     )
+    manager.log_memory_usage("After inference")
 
     n_samples = int(output["posed_joints"].shape[0])
     # Parse the output stem once; all formats (NPZ, AMASS NPZ, CSV, BVH) use this base name.

@@ -26,9 +26,17 @@ def global_rots_to_local_rots(global_joint_rots: torch.Tensor, skeleton):
     )
 
     # obtain back the local rotations from the new global rotations
-    parent_rot_mats = global_joint_mats[:, skeleton.joint_parents]
+    joint_parents = skeleton.joint_parents
+    if torch.is_tensor(joint_parents):
+        joint_parents = joint_parents.to(global_joint_mats.device)
+    
+    parent_rot_mats = global_joint_mats[:, joint_parents]
 
-    parent_rot_mats[:, skeleton.root_idx] = torch.eye(3)  # the root joint
+    root_idx = skeleton.root_idx
+    if torch.is_tensor(root_idx):
+        root_idx = root_idx.to(global_joint_mats.device)
+
+    parent_rot_mats[:, root_idx] = torch.eye(3, device=global_joint_mats.device)  # the root joint
     parent_rot_mats_inv = parent_rot_mats.transpose(2, 3)
     local_rot_mats = torch.einsum(
         "T N m n, T N n o -> T N m o",

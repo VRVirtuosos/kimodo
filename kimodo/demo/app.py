@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import base64
+import gc
 import os
 import shutil
 import threading
@@ -18,6 +19,8 @@ from kimodo.model.registry import resolve_model_name
 from kimodo.skeleton import SkeletonBase, SOMASkeleton30
 from kimodo.tools import load_json
 from kimodo.viz import viser_utils
+from kimodo.demo.memory_manager import manager as memory_manager
+from kimodo.viz.scene import SKIN_CACHE
 from kimodo.viz.viser_utils import (
     Character,
     CharacterMotion,
@@ -53,11 +56,19 @@ from .state import ClientSession, ModelBundle
 
 
 class Demo:
-    def __init__(self, default_model_name: str = DEFAULT_MODEL):
+    def __init__(self, default_model_name: str = DEFAULT_MODEL, offload: bool = False):
         self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
         print(f"Using device: {self.device}")
+        
+        # Configure global memory manager
+        memory_manager.offload_enabled = offload
+        
         self.models: dict[str, ModelBundle] = {}
+        self.client_sessions: dict[int, ClientSession] = {}
+        self.start_direction_markers: dict[int, viser_utils.WaypointMesh] = {}
+        self.grid_handles: dict[int, viser.GridHandle] = {}
         self._text_encoder = None
+        
         resolved = resolve_model_name(default_model_name, "Kimodo")
         if resolved not in MODEL_NAMES:
             raise ValueError(f"Unknown model '{default_model_name}'. Expected one of: {MODEL_NAMES}")
@@ -68,11 +79,6 @@ class Demo:
         # Serialize GPU-bound generation across all clients
         self._generation_lock = threading.Lock()
         self._cuda_healthy = True
-
-        # Per-client sessions
-        self.client_sessions: dict[int, ClientSession] = {}
-        self.start_direction_markers: dict[int, viser_utils.WaypointMesh] = {}
-        self.grid_handles: dict[int, viser.GridHandle] = {}
 
         self.server = viser.ViserServer(
             host=SERVER_NAME,
@@ -128,15 +134,18 @@ class Demo:
         if model_name in self.models:
             return self.models[model_name]
 
-        print(f"Loading model {model_name}...")
+        print(f"[Demo] Loading model {model_name}...")
         try:
             model = load_model(
                 modelname=model_name,
-                device=self.device,
+                device=self.device,  # Load directly to GPU to save System RAM
                 text_encoder=self._text_encoder,
             )
+            memory_manager.register_model(model_name, model)
+            if hasattr(model, "text_encoder"):
+                memory_manager.register_encoder(model.text_encoder)
         except Exception as e:
-            print(f"Error loading model: {e}\nMake sure text encoder server is running!")
+            print(f"[Demo] Error loading model: {e}\nMake sure text encoder server is running!")
             raise e
 
         if hasattr(model, "text_encoder"):
@@ -145,8 +154,8 @@ class Demo:
             model.text_encoder = CachedTextEncoder(model.text_encoder, model_name=model_name)
 
         skeleton = model.motion_rep.skeleton
-        if isinstance(skeleton, SOMASkeleton30):
-            skeleton = skeleton.somaskel77.to(model.device)
+        if hasattr(skeleton, "somaskel77"):
+            skeleton = skeleton.somaskel77 
         bundle = ModelBundle(
             model=model,
             motion_rep=model.motion_rep,
@@ -158,33 +167,60 @@ class Demo:
         self.prewarm_embedding_cache(model_name, bundle.model)
         return bundle
 
-    def prewarm_embedding_cache(self, model_name: str, model: object) -> None:
+    def purge_model(self, model_name: str) -> None:
+        if model_name in self.models:
+            print(f"[Demo] Purging model {model_name} from application state...")
+            del self.models[model_name]
+        
+        memory_manager.purge_model_completely(model_name)
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    def prewarm_embedding_cache(self, model_name: str, model: object, custom_prompts: Optional[list[str]] = None) -> None:
         encoder = getattr(model, "text_encoder", None)
-        if not isinstance(encoder, CachedTextEncoder):
+        # Type check to ensure the Text Encoder is wrapped correctly
+        if encoder is None or type(encoder).__name__ != "CachedTextEncoder":
             return
 
-        prompt_set = set()
-        prompt_set.add(DEFAULT_PROMPT)
+        if custom_prompts:
+            # Clean up the list to filter out empty strings/whitespace
+            prompt_set = {p.strip() for p in custom_prompts if p and p.strip()}
+        else:
+            prompt_set = set()
+            prompt_set.add(DEFAULT_PROMPT.strip())
 
-        examples_dir = MODEL_EXAMPLES_DIRS.get(model_name)
-        if examples_dir and os.path.isdir(examples_dir):
-            for entry in os.listdir(examples_dir):
-                example_dir = os.path.join(examples_dir, entry)
-                if not os.path.isdir(example_dir):
-                    continue
-                meta_path = os.path.join(example_dir, "meta.json")
-                if not os.path.exists(meta_path):
-                    continue
-                try:
-                    meta = load_json(meta_path)
-                except Exception:
-                    continue
-                for prompt in meta.get("prompts_text", []):
-                    if isinstance(prompt, str):
-                        prompt_set.add(prompt)
+            examples_dir = MODEL_EXAMPLES_DIRS.get(model_name)
+            if examples_dir and os.path.isdir(examples_dir):
+                for entry in os.listdir(examples_dir):
+                    example_dir = os.path.join(examples_dir, entry)
+                    if not os.path.isdir(example_dir):
+                        continue
+                    meta_path = os.path.join(example_dir, "meta.json")
+                    if not os.path.exists(meta_path):
+                        continue
+                    try:
+                        meta = load_json(meta_path)
+                    except Exception:
+                        continue
+                    for prompt in meta.get("prompts_text", []):
+                        if isinstance(prompt, str):
+                            prompt_set.add(prompt)
 
         if prompt_set:
+            encoder.reload()
+            torch.cuda.empty_cache()
+            import gc
+            gc.collect()
+            
             encoder.prewarm(list(prompt_set))
+            memory_manager.purge_encoder_completely()
+            if hasattr(self, "client_sessions"):
+                for s in self.client_sessions.values():
+                    s.last_prompt_embeddings = None
+                    s.last_prompt_lengths = None
+            
+            torch.cuda.ipc_collect()
+            torch.cuda.empty_cache()
 
     def build_constraint_tracks(
         self, client: viser.ClientHandle, skeleton: SkeletonBase
@@ -427,6 +463,15 @@ class Demo:
             return
         session = self.client_sessions[client_id]
 
+        if joints_pos is not None:
+            joints_pos = joints_pos.cpu()
+        if joints_rot is not None:
+            joints_rot = joints_rot.cpu()
+        if foot_contacts is not None:
+            foot_contacts = foot_contacts.cpu()
+
+        SKIN_CACHE.clear()
+
         ci = len(session.motions)
         character_name = f"character{ci}"
         # build character skeleton and skinning mesh
@@ -464,7 +509,12 @@ class Demo:
         if joints_rot is None:
             joints_rot = init_joints_rot[None].repeat(session.max_frame_idx + 1, 1, 1, 1)
 
-        new_motion = CharacterMotion(new_character, joints_pos, joints_rot, foot_contacts)
+        new_motion = CharacterMotion(
+            new_character, 
+            joints_pos, 
+            joints_rot, 
+            foot_contacts
+        )
         # save the motion in our dict
         session.motions[character_name] = new_motion
 
@@ -557,7 +607,20 @@ class Demo:
 
         try:
             session = self.client_sessions[client.client_id]
-            model_bundle = self.load_model(session.model_name)
+            model_bundle = self.models[session.model_name]
+            
+            print(f"[Demo] Generation Phase 1: Pre-encoding...")
+            if hasattr(model_bundle.model, "text_encoder"):
+                prompt_set = set(prompts)
+                if cfg_weight is not None and any(w > 0 for w in cfg_weight):
+                    prompt_set.add("")
+                    prompt_set.add(" ")
+                
+                self.prewarm_embedding_cache(session.model_name, model_bundle.model, custom_prompts=list(prompt_set))
+                memory_manager.touch_and_move(session.model_name, self.device)
+            
+            SKIN_CACHE.clear()
+            
             generation.generate(
                 client=client,
                 session=session,
@@ -576,6 +639,16 @@ class Demo:
                 clear_motions=self.clear_motions,
                 add_character_motion=self.add_character_motion,
             )
+
+            print(f"[Demo] Generation complete. Reclaiming System RAM...")
+            memory_manager.purge_encoder_completely()
+            memory_manager.report_residency()
+            session.last_prompt_embeddings = None
+            session.last_prompt_lengths = None
+            
+            gc.collect()
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
         finally:
             self._generation_lock.release()
 
@@ -603,8 +676,6 @@ class Demo:
             else:
                 playback_fps = 60.0
 
-            # update each client session independently
-            #   copy to a list first to avoid changing size if client disconnects
             for client_id, session in list(self.client_sessions.items()):
                 update_interval = int(playback_fps / (session.playback_speed * session.model_fps))
                 new_frame_idx = session.frame_idx

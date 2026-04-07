@@ -466,6 +466,29 @@ def create_gui(
                     visible="g1" in _model_name,
                 )
 
+            with client.gui.add_folder("Memory", expand_by_default=False):
+                from kimodo.demo.memory_manager import manager as memory_manager
+
+                gui_reclaim_ram_button = client.gui.add_button(
+                    "Reclaim System RAM",
+                    icon=viser.Icon.RECYCLE,
+                    hint="Force garbage collection and offload the text encoder to CPU to free System RAM. No disk reload required.",
+                )
+
+                @gui_reclaim_ram_button.on_click
+                def _(event: viser.GuiEvent) -> None:
+                    memory_manager.purge_encoder_completely()
+                    # Also clear the session cache
+                    session = get_active_session(event.client)
+                    if session is not None:
+                        session.last_prompt_embeddings = None
+                        session.last_prompt_lengths = None
+                    client.add_notification(
+                        title="RAM Reclaimed",
+                        body="Reference cleanup complete. RAM should now be free.",
+                        loading=False,
+                    )
+
             gui_generate_button = client.gui.add_button("Generate", color="green")
         with client.gui.add_folder("Constraints", expand_by_default=False):
             gui_gizmo_space_dropdown = client.gui.add_dropdown(

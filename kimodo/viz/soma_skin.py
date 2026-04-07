@@ -57,9 +57,12 @@ class SOMASkin:
                 raise ValueError(f"MISMATCH in skinnging rig: expected='{sname}' vs rig='{rname}'")
 
     def lbs(self, posed_transform):
-        bind_rig_transform_inv = self.bind_rig_transform_inv
-        bind_vertices = self.bind_vertices
-        lbs_weights = self.lbs_weights
+        device = posed_transform.device
+        bind_rig_transform_inv = self.bind_rig_transform_inv.to(device)
+        bind_vertices = self.bind_vertices.to(device)
+        lbs_weights = self.lbs_weights.to(device)
+        lbs_indices = self.lbs_indices.to(device)
+
         # posed_transform: [B, F, J, 4, 4] or [B, J, 4, 4] or [J, 4, 4]
         # unsqueeze to match posed_transform dim
         for _ in range(posed_transform.dim() - 3):
@@ -72,7 +75,7 @@ class SOMASkin:
 
         affine_mat = (posed_transform @ bind_rig_transform_inv)[..., :3, :]  # [..., J, 3, 4]
         vs = (
-            affine_mat[..., self.lbs_indices, :, :]
+            affine_mat[..., lbs_indices, :, :]
             @ torch.concat([bind_vertices, torch.ones_like(bind_vertices[..., 0:1])], dim=-1)[..., None, :, None]
         )  # [..., V, W, 3, 1]
         ws = lbs_weights[..., None, None]

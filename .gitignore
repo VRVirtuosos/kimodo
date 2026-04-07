@@ -11,6 +11,7 @@ __pycache__/
 *.so
 
 datasets
+KIMODO-Meta3_llm2vec_NF4/
 
 # Distribution / packaging
 .Python

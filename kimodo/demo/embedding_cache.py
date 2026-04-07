@@ -3,6 +3,7 @@
 
 import contextlib
 import contextvars
+import gc
 import hashlib
 import json
 import os
@@ -214,10 +215,11 @@ class EmbeddingCache:
         return result, lengths
 
 
-class CachedTextEncoder:
+class CachedTextEncoder(torch.nn.Module):
     """Wrapper around a text encoder to add disk-backed caching."""
 
     def __init__(self, encoder, *, model_name: str, base_dir: Optional[str] = None):
+        super().__init__()
         self.encoder = encoder
         self.model_name = model_name
         encoder_id = f"{type(encoder).__name__}"
@@ -236,10 +238,32 @@ class CachedTextEncoder:
         self.cache.get_or_encode(texts, self.encoder)
         self.cache.write_prewarm_marker(prewarm_key, prompt_count=len(texts))
 
-    def to(self, device=None, dtype=None):
-        if hasattr(self.encoder, "to"):
-            self.encoder.to(device=device, dtype=dtype)
+    def to(self, *args, **kwargs):
+        self.encoder.to(*args, **kwargs)
         return self
+
+    def unload(self):
+        """Purge the inner encoder from VRAM."""
+        if hasattr(self.encoder, "unload"):
+            self.encoder.unload()
+
+    def reload(self):
+        """Reload the inner encoder into VRAM."""
+        if hasattr(self.encoder, "reload"):
+            self.encoder.reload()
+
+    def clear(self):
+        """Clear the in-memory LRU cache."""
+        with self.cache._lock:
+            self.cache._mem_cache.clear()
+            self.cache._index_loaded = False
+        gc.collect()
+
+    def delete(self):
+        """Reclaim RAM without deleting from disk."""
+        self.clear()
+        if hasattr(self.encoder, "delete"):
+            self.encoder.delete()
 
     @contextlib.contextmanager
     def session_context(self, session):
@@ -249,5 +273,3 @@ class CachedTextEncoder:
         finally:
             _ACTIVE_SESSION.reset(token)
 
-    def __getattr__(self, name):
-        return getattr(self.encoder, name)
