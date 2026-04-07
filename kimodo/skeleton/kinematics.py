@@ -156,9 +156,10 @@ def forward_kinematics(
     # Compute relative joint positions
     rel_joints = joints.clone()
 
-    mask_no_root = torch.ones(joints.shape[1], dtype=torch.bool)
+    parents_dev = parents.to(joints.device)
+    mask_no_root = torch.ones(joints.shape[1], dtype=torch.bool, device=joints.device)
     mask_no_root[root_idx] = False
-    rel_joints[:, mask_no_root] -= joints[:, parents[mask_no_root]].clone()
+    rel_joints[:, mask_no_root] -= joints[:, parents_dev[mask_no_root]].clone()
 
     # Compute initial transformation matrices
     # (B, J + 1, 4, 4)
@@ -172,8 +173,9 @@ def forward_kinematics(
 
     # Compute global transformations level by level
     for indices in idx_levs:
-        curr_res = torch.matmul(transforms[:, parents[indices]], transforms_mat[:, indices])
-        transforms[:, indices] = curr_res
+        indices_dev = indices.to(joints.device)
+        curr_res = torch.matmul(transforms[:, parents_dev[indices_dev]], transforms_mat[:, indices_dev])
+        transforms[:, indices_dev] = curr_res
 
     # Extract posed joint positions from the transformation matrices
     posed_joints = transforms[:, :, :3, 3]
